@@ -1,0 +1,391 @@
+---
+
+output: pdf_document
+---
+# Anexo
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Procedemos a la carga de datos. 
+
+```{r}
+#install.packages("readxl")
+library(readxl)
+datos<-read_excel("Ejercicio regresión de conteo y gam.xlsx")
+datos$X13<-as.factor(datos$X13)
+attach(datos)
+```
+
+Veamos la distribución de la variable objetivo. 
+```{r}
+plot(table(var_obj),ylab = "Frecuencia",main="Variable objetivo")
+
+```
+
+Observamos que la variable objetivo es discreta y no negativa. Por ello, nos podemos plantear una regresión con datos de conteo. Comparemos la distribución empírica de la variable objetivo con la función de distribución teórica de una Poisson. 
+
+```{r}
+df1<-data.frame(table(datos$var_obj))
+names(df1)<-c("var_obj","Freq")
+df1$Tipo<-"Empírica"
+df1$Freq<-df1$Freq/sum(df1$Freq)
+mvar_obj<-mean(datos$var_obj)
+
+valores<-sort(unique(datos$var_obj))
+df2<-data.frame(var_obj=valores,dpois(valores,lambda=mvar_obj))
+names(df2)[2]<-"Freq"
+df2$Tipo<-"Teórica"
+df<-rbind(df1,df2)
+
+library(ggplot2)
+ggplot(data=df, aes(x=var_obj, y=Freq, fill=Tipo)) +
+  geom_bar(stat="identity", position=position_dodge())
+
+xempp <- seq(min(datos$var_obj), max(datos$var_obj), by=0.01)
+plot(xempp, ppois(xempp, lambda=mvar_obj), type="l", col="green", xlab="Variable objetivo",
+     ylab="ppois(variable objetivo)")
+plot(ecdf(datos$var_obj), col="red",add=TRUE)
+```
+El análisis gráfico sugiere que la distribución empírica de la variable objetivo guarda una razonable concordancia con una distribución de Poisson, lo que indica que este modelo podría ser apropiado para la regresión. 
+
+## Modelo Lineal Generalizado
+
+Comenzaremos analizando el modelo con todas las variables.
+```{r}
+regre_todas<-glm(var_obj~.,family = "poisson",data=datos)
+#install.packages("AER")
+library(AER)
+dispersiontest(regre_todas)
+```
+
+La función `dispersiontest` del paquete de AER se utiliza para realizar una prueba de dispersión del modelo de Poisson. Se acepta que la media y la varianza coinciden. 
+
+La devianza mide cuánto se aleja un modelo de la perfección. Matemáticamente , la devianza se definde como 
+$$D=2 \times (logL_{modelo saturado}- logL_{modelo ajustado})$$
+donde el modelo saturado predice cada punto perfectamente. Por ello a mayor devianza, menor capacidad de predicción posee el modelo estimado. 
+La devianza nula mide qué tan bien el modelo más simple (solo con el intercepto) explica la variable respuesta. Sirve como punto de referencia para evaluar si añadir predictores mejora la capacidad explicativa del modelo. La devianza residual es la cantidad de variabilidad que el modelo no ha conseguido explicar. Un valor muy bajo de devianza residual sugiere que el modelo ajusta bastante bien los datos.
+La devianza explicada mide qué proporción de la devianza total ha sido explicada por el modelo. 
+$$D_{expl}=\frac{\text{Devianza nula - Devianza residual}}{\text{Devianza nula}}$$
+
+```{r}
+summary(regre_todas)
+regre_todas$null.deviance
+regre_todas$deviance
+(dev_expl<-(regre_todas$null.deviance-regre_todas$deviance)/regre_todas$null.deviance)
+```
+Observamos que la devianza residual es bastante baja, por lo que la devianza explicada es bastante alta. 
+Sin embargo hay numerosas variables que el modelo considera insignificativas. Comprobemos si hay multicolinealidad entre las variables y están alterando los resultados del modelo.
+
+```{r}
+library(car)
+vif(regre_todas)
+```
+
+Observamos que no hay ninguna variable que presente un Factor de Inflación de la Varianza (VIF) superior a 10, por lo que destacaremos multicolinealidad.
+Tomando un nivel de significación de $0.05$, las variables significativas del modelo son $X_1,X_4$ y $X_{11}$. Estudiemos el modelo de regresión con dichas variables. 
+```{r}
+reg<-glm(var_obj~X1+X4+X11,family = "poisson",data=datos)
+reg$deviance
+summary(reg)
+```
+
+La devianza residual ha aumentado levemente en este modelo. No obstante hemos conseguido disminuir el AIC y considerando un modelo más simple, por lo que podríamos considerar que este segundo modelo es mejor que el modelo que considera todas las variables.
+```{r}
+regre_todas$aic
+reg$aic
+```
+
+Calculemos si la diferencia de devianza entre los dos modelos es estadísticamente significativa.
+```{r}
+anova(regre_todas,reg)
+```
+No hay evidencias para rechazar la hipótesis nula, es decir, la diferencia entre el modelo `regre_todas` y `reg` no es estadísticamente significativa. Es por tanto, que frente al modelo de todas las variables, se considera mejor el modelo con las variables $X_1, X_4$ y $X_{11}$ al ser más simple y lograr la misma explicabilidad de la variable objetivo. 
+Veamos ahora si considerar una relación no lineal aporta mejores resultados.
+
+## Modelos aditivos generalizados
+
+Plantearemos el primer modelo utilizando todas las variables.
+```{r}
+#install.packages("gamair")
+library(gamair)
+library(mgcv)
+gm<-gam(var_obj~s(X1)+s(X2)+s(X3)+s(X4)+s(X5)+s(X6)+s(X7)+s(X8)+s(X9)+s(X10)+s(X11)+s(X12)+factor(X13),family="poisson",data=datos )
+```
+Por defecto, la función `gam()` de la librería mgcv utiliza splines suavizado penalizado y utilizando spline de regresión de placas delgadas como base. Toma `scale=1`. Dado que hemos asumido igualdad de media y varianza podemos dejar dicho valor por defecto.
+```{r}
+summary(gm)
+```
+
+Observamos que el único término suave significativo es $s(X_{11})$ con un `edf` de 5.825, indicando una relación no lineal compleja. 
+```{r}
+par(mfrow=(c(2,2)))
+plot(gm)
+summary(gm)$r.sq
+```
+Efectivamente para el resto de variables considera un efecto lineal (edf = 1), aunque no significativo.  
+Procedamos a estudiar la concurvidad de las variables. La concurvidad en los modelos aditivos generalizados se refiere a una situación en la que uno o más términos suaves en el modelo pueden ser aproximados por otros términos suaves del mismo modelo. Es similar a la colinealidad en los modelos lineales, pero se aplica a términos suaves en lugar de términos lineales. Dado que hemos obtenido un valor $R^2_{adj}$ muy alto, podremos estar ante una situación de concurvidad.
+```{r}
+concurvity(gm)
+```
+Un valor cercano a 1 indica concurvidad, mientras que un valor cercano a 0 indica que no existe tal problema. `worst` muestra el peor caso de concurvidad posible para cada término suave. `observed` muestra la concurvidad observada y `estimated` la estimación. Observamos que hay problemas con varias variables. Comenzaremos eliminando las variables $X_1$ y $X_4$. Además eliminaremos la variable $X_{13}$ ya que no se considera significativa.
+```{r}
+gm2<-gam(var_obj~s(X2)+s(X3)+s(X5)+s(X6)+s(X7)+s(X8)+s(X9)+s(X10)+s(X11)+s(X12),family="poisson",data=datos )
+summary(gm2)
+(aic1=AIC(gm))
+(aic2=AIC(gm2))
+```
+
+Hemos obtenido un modelo similar, en el que solo considera como término suave significativo $s(X_{11})$. No obstante, hemos conseguido reducir levemente el AIC al considerar menos variables. Estudiemos la concurvidad de este modelo. 
+```{r}
+concurvity(gm2)
+```
+
+Sigue habiendo problemas de concurvidad. Sigamos reduciendo el número de variables. Descartemos ahora las variables $X_7$ y $X_6$
+
+```{r}
+gm3<-gam(var_obj~s(X2)+s(X3)+s(X5)+s(X8)+s(X9)+s(X10)+s(X11)+s(X12),family="poisson",data=datos )
+summary(gm3)
+(aic3=AIC(gm3))
+concurvity(gm3)
+```
+Sigamos reduciendo el número de variables. Descartemos ahora las variables $X_5$ y $X_{10}$
+
+```{r}
+gm4<-gam(var_obj~s(X2)+s(X3)+s(X8)+s(X9)+s(X11)+s(X12),family="poisson",data=datos )
+summary(gm4)
+(aic4=AIC(gm4))
+concurvity(gm4)
+```
+
+Hemos conseguido eliminar los problemas de concurvidad. Sin embargo seguimos considerando variables en las que no rechazamos los contrastes individuales. Construyamos un modelo con la única variable significativa.
+```{r}
+gm5<-gam(var_obj~s(X11),family = poisson, data = datos)
+summary(gm5)
+(aic5=AIC(gm5))
+```
+
+Veamos una tabla resumen de los resultados obtenidos.
+```{r}
+modelos<-c("gm","gm2","gm3","gm4","gm5")
+aic=c(aic1,aic2,aic3,aic4,aic5)
+
+r_adj=c(summary(gm)$r.sq,summary(gm2)$r.sq,summary(gm3)$r.sq,summary(gm4)$r.sq,summary(gm5)$r.sq)
+dev_r=c(gm$deviance,gm2$deviance,gm3$deviance,gm4$deviance,gm5$deviance)
+dev_exp=c(summary(gm)$dev.expl,summary(gm2)$dev.expl,summary(gm3)$dev.expl,summary(gm4)$dev.expl,summary(gm5)$dev.expl)
+
+(summary_table <- data.frame(
+  Model = modelos,
+  Adjusted_R2 = r_adj,
+  AIC = aic,
+  Deviance_Residual = dev_r,
+  Deviance_Explained=dev_exp
+))
+
+```
+Todos los modelos obtienen un $R^2_{adj}$ similar, al igual que los valores para la devianza explicada. Es por ello que podemos considerar que el mejor modelo es el que considera únicamente la variable $X_{11}$, pues es el que mejor AIC posee. 
+Hagamos el test ANOVA para confirmar que los modelos anteriores son realmente modelos anidados a éste último.
+```{r}
+anova.gam(gm,gm2,gm3,gm4,gm5)
+```
+Ninguno de los términos eliminados en los modelos sucesivos resulta en un cambio significativo en la devianza. Esto sugiere que los términos eliminados no contribuyen significativamente al ajuste del modelo.El modelo más simple parece ser suficiente para explicar la variabilidad en los datos.
+
+```{r}
+par(mfrow=c(1,1))
+plot(X11,gm5$fitted.values,col="black",pch=16,ylab="Variable objetivo")
+points(X11,var_obj,col="red",pch=10)
+legend("topleft", legend = c("Estimación", "Observación"), col = c("black", "red"), pch = c(16,10))
+
+```
+
+Veamos ahora otros modelos estudiando únicamente la variable $X_{11}$ pero cambiando el tipo de spline.
+
+```{r}
+gm6<-gam(var_obj~s(X11,bs="cr"),family=poisson,data=datos)
+summary(gm6) 
+(aic6=AIC(gm6))
+```
+Obtenemos resultados muy similares.
+
+```{r}
+plot(gm5)
+title("Thin plate spline")
+plot(gm6)
+title("Cubic regression spline")
+
+```
+
+El spline de placa delgada es más flexible, como se puede observar en las fluctuaciones más notables al inicio del rango de $X_{11}$. En el spline cúbico restringido muestra un efecto más contenido, con un suavizado más rígido y lineal hacia el final del rango de $X_{11}$. Los intervalos de confianza son más amplios en el spline de placa delgada, especialmente en los extremos del rango de $X_{11}$. Esto sugiere que el modelo permite mayor flexibilidad, pero a costa de mayor incertidumbre en las estimaciones. No obstante, debido a los resultados tan similares, nos quedaremos con `gm5`.
+
+```{r}
+plot(X11,var_obj,col="black",pch=16)
+points(X11,gm5$fitted.values,col="red",pch=8)
+points(X11,gm6$fitted.values,col="blue",pch=1)
+legend("topleft", legend = c("Observación","Est. placa delgada","Est. cúbico restringido"), col = c("black", "red"), pch = c(16,8,1),cex=0.8)
+title("Comparación modelos GAM")
+
+```
+
+En el modelo GAM con todas las variables vimos que la variable $X_{13}$ no era significativa para el modelo. Sin embargo, como teníamos problemas de concurvidad, vamos a comprobar si verdaderamente la variable categórica no es significativa o los resultados anteriores se vieron alterados.
+```{r}
+ggplot(data=datos,aes(x=X11,y=var_obj,color=X13))+
+  geom_point(alpha=0.6)+
+  geom_smooth(method = "gam", formula = y ~ s(x),method.args = list(family = poisson), se = FALSE) + 
+  labs(
+    title = "Relación entre X11 y var_obj por niveles de X13",
+    x = "X11",
+    y = "var_obj",
+    color = "Niveles de X13"
+  ) +
+  theme_minimal() 
+  theme(legend.position = "left")
+```
+
+No hay señales de una interacción significativa entre $X_{11}$ y $X_{13}$ pues no hay una separación clara entre las curvas de cada categoría. No obstante, hay una cierta separación cuando la variable $X_{11}$ toma valores entre 0 y 1. En dicha franja era donde observábamos un mayor error en el modelo. Procedamos a construir el modelo para contrastar este resultado.
+
+```{r}
+gm7<-gam(var_obj~s(X11,by=X13),family = poisson,data=datos)
+summary(gm7)
+(aic7=AIC(gm7))
+
+```
+A pesar de la significación de los términos suaves individuales, el AIC aumenta y el $R^2_{adj}$ se mantiene.
+
+```{r}
+nuevas_filas<-data.frame(Model=c("gm6","gm7"),Adjusted_R2=c(summary(gm6)$r.sq,summary(gm7)$r.sq),
+                         AIC=c(aic6,aic7),Deviance_Residual=c(gm5$deviance,gm6$deviance),
+                         Deviance_Explained=c(summary(gm6)$dev.expl,summary(gm7)$dev.expl))
+
+(summary_table<-rbind(summary_table,nuevas_filas))
+```
+Concluimos por tanto que el mejor modelo aditivo generalizado es aquel que considera únicamente la variable $X_{11}$
+
+Vamos a estudiar si existe sobreajuste. Para ello dividamos los datos en conjunto test y conjunto de entrenamiento. 
+```{r}
+set.seed(456)
+indices<-sample(1:nrow(datos),round(0.7*nrow(datos),0))
+train<-datos[indices,]
+test<-datos[-indices,]
+```
+Construyamos el modelo con los datos de entrenamiento y verifiquemos su bondad con los datos test.
+```{r}
+gm5_test<-gam(var_obj~s(X11),family = poisson, data = train)
+summary(gm5_test)$r.sq
+predicciones<-predict.gam(gm5_test,newdata=test[,-1],type="response")
+(err1<-mean( (test$var_obj -predicciones)^2))
+
+par(mfrow=c(1,3))
+plot(test$X11,test$var_obj,col="red",main="Observaciones test")
+plot(test$X11,predicciones,col="blue",main="Estimaciones test")
+plot(test$X11,test$var_obj,col="red",main="Comparación test")
+points(test$X11,predicciones,col="blue",main="Estimaciones test")
+
+```
+Observamos un buen ajuste en el conjunto test, por lo que rechazamos el sobreajuste.
+
+
+## Regresión polinómica
+
+Vamos a estudiar distintos modelos de regresión polinómica considerando la variable $X_{11}$.
+```{r}
+par(mfrow=c(3,2))
+for(i in 1:6) {plot(X11,poly(X11,6,raw=T)[,i])}
+regpoly<-lm(var_obj~poly(X11,6,raw=T),data=datos)
+summary(regpoly)
+AIC(regpoly)
+```
+
+Hemos rechazado todos los contrastes individuales y hemos obtenido un gran ajuste. Sigamos aumentando el grado para ver si obtenemos mejores resultados. Más adelante, comprobaremos si existe sobreajuste. 
+
+```{r}
+regpoly2<-lm(var_obj~poly(X11,8,raw=T),data=datos)
+summary(regpoly2)
+AIC(regpoly2)
+```
+Ahora no se rechazan todos los contrastes individuales y hemos conseguido disminuir el AIC. Construiremos un modelo con un grado más y realizaremos el test de ANOVA para ver con qué modelo nos quedamos. 
+```{r}
+regpoly3<-lm(var_obj~poly(X11,9,raw=T),data=datos)
+summary(regpoly3)
+AIC(regpoly3)
+anova(regpoly,regpoly2,regpoly3)
+```
+Al aumentar a una regresión polinómica de grado 9 hemos aumentado el AIC. Por ello, y apoyándonos en los resultados del test ANOVA, tomaremos la regresión de grado 8.
+```{r}
+(summary(regpoly2)$adj.r.squared)
+```
+
+Construyamos el modelo con los datos de entrenamiento y verifiquemos su bondad con los datos test.
+```{r}
+regpoly_entreno<-lm(var_obj~poly(X11,8,raw=T),data=train)
+summary(regpoly_entreno)$adj.r.squared
+predicciones<-predict(regpoly_entreno,test[,-1])
+(err2<-mean( (test$var_obj -predicciones)^2))
+
+par(mfrow=c(1,1))
+plot(test$X11,test$var_obj,col="red",)
+points(test$X11,predicciones,col="blue")
+title("Prueba sobreajuste reg. polinómica gr=8")
+```
+
+Observamos que el modelo realiza un ajuste muy bueno considerando el conjunto de entrenamiento y prediciendo el conjunto test. Podemos descartar el sobreajuste. 
+
+## Regresión con splines 
+```{r}
+library(splines)
+```
+
+Este paquete proporciona funciones para trabajar con splines utilizando la base B-spline  y la base spline cúbico natural. 
+Por defecto la función tomará tres nodos.
+
+```{r}
+reg_spline1<-lm(var_obj~bs(X11),data=datos)
+summary(reg_spline1)
+
+
+plot(X11,var_obj,col="red",pch=16)
+points(X11,reg_spline1$fitted.values,col="blue",pch=1)
+legend("topleft",legend = c("Observación","Estimación"),col=c("red","blue"),pch=c(16,1))
+title("Spline con tres nodos por defecto")
+```
+
+Hasta ahora, gráficamente se puede observar que es el peor modelo que hemos obtenido. Sin embargo se muestra un valor alto de $R^2_{adj}$. Vamos a indicar los puntos donde vemos un mayor cambio en la variable objetivo según los valores de $X_11$. 
+```{r}
+reg_spline2<-lm(var_obj~bs(X11,knots=c(0,1)),data=datos)
+summary(reg_spline2)
+
+
+plot(X11,var_obj,col="red",pch=16)
+points(X11,reg_spline2$fitted.values,col="blue",pch=1)
+legend("topleft",legend = c("Observación","Estimación"),col=c("red","blue"),pch=c(16,1))
+title("Spline con nodo en 0 y 1")
+```
+Efectivamente, vemos la importancia de tomar los nodos correctos.
+```{r}
+(aic_sp1=AIC(reg_spline1))
+(aic_sp2=AIC(reg_spline2))
+```
+Hemos conseguido disminuir considerablemente el AIC. 
+
+Veamos si existe sobreajuste. 
+```{r}
+regspline_entreno<-lm(var_obj~bs(X11,knots=c(0,1)),data=train)
+summary(regspline_entreno)$adj.r.squared
+predicciones<-predict(regspline_entreno,test[,-1])
+(err3<-mean( (test$var_obj -predicciones)^2))
+
+par(mfrow=c(1,1))
+plot(test$X11,test$var_obj,col="red",)
+points(test$X11,predicciones,col="blue")
+title("Prueba de sobreajuste spline")
+```
+Observamos que el modelo realiza un ajuste muy bueno considerando el conjunto de entrenamiento y prediciendo el conjunto test. Podemos descartar el sobreajuste. 
+
+```{r}
+plot(X11,var_obj,col="black",pch=16)
+points(X11,gm5$fitted.values,col="red",pch=1)
+points(X11,regpoly2$fitted.values,col="blue",pch=1)
+points(X11,reg_spline2$fitted.values,col="green",pch=1)
+legend("topleft",legend=c("Datos","gm5","regpoly2","regspline2"),pch=c(16,1,1,1),col=c("black","red","blue","green"))
+```
+
+
+
